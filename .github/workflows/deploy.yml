@@ -1,0 +1,14 @@
+---
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: nwilson5/cicd/.github/workflows/deploy-cloudflare-worker.yml@main
+    with:
+      worker-name: nuuson-api-gateway
+      vault_addr: ${{ vars.VAULT_ADDR }}
+      vault_role: project-nuuson-api-gateway

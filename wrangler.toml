@@ -1,0 +1,6 @@
+name = "nuuson-api-gateway"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Custom domain (api.nuuson.dev) is managed by nwmain Tofu.
+# This Worker is deployed to the account and attached via Tofu.
