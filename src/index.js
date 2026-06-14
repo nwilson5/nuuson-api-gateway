@@ -40,8 +40,7 @@ export default {
     const url = new URL(request.url);
     for (const [prefix, backend] of Object.entries(ROUTES)) {
       if (url.pathname.startsWith(prefix)) {
-        const targetPath = url.pathname.slice(prefix.length) || '/';
-        const targetUrl = backend + targetPath + url.search;
+        const targetUrl = backend + url.pathname + url.search;
 
         const outboundHeaders = new Headers(request.headers);
         outboundHeaders.delete('Authorization');
