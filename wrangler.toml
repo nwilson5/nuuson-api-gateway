@@ -4,3 +4,7 @@ compatibility_date = "2025-01-01"
 
 # Custom domain (api.nuuson.dev) is managed by nwmain Tofu.
 # This Worker is deployed to the account and attached via Tofu.
+
+[[kv_namespaces]]
+binding = "API_KEYS"
+id = "552339bbf2644a61952c85c0c46883f7"  # set to output of: tofu -chdir=infra/environments/prod output api_keys_kv_namespace_id

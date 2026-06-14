@@ -5,5 +5,5 @@
 // Backend URLs should be internal subdomains protected by Cloudflare Access.
 
 export const ROUTES = {
-  // '/v1/testing/': 'https://testing-internal.nuuson.dev',
+  '/v1/testing/': 'https://testing-internal.nuuson.dev',
 };
