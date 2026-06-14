@@ -7,6 +7,9 @@ on:
 
 jobs:
   deploy:
+    permissions:
+      id-token: write
+      contents: read
     uses: nwilson5/cicd/.github/workflows/deploy-cloudflare-worker.yml@main
     with:
       worker-name: nuuson-api-gateway
