@@ -25,6 +25,26 @@ function keyEntry(overrides = {}) {
   return JSON.stringify({ id: 'u1', valid: true, scopes: ['testing'], tier: 'free', ...overrides });
 }
 
+describe('global settings', () => {
+  it('503 when disable_all_apis is enabled', async () => {
+    const env = makeEnv({ 'global:disable_all_apis': JSON.stringify({ enabled: true }) });
+    const res = await worker.fetch(req('/v1/testing/health', { Authorization: 'Bearer any' }), env);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'service unavailable' });
+  });
+
+  it('proceeds normally when disable_all_apis is disabled', async () => {
+    const env = makeEnv({ 'global:disable_all_apis': JSON.stringify({ enabled: false }) });
+    const res = await worker.fetch(req('/v1/testing/health', { Authorization: 'Bearer any' }), env);
+    expect(res.status).toBe(401);
+  });
+
+  it('proceeds normally when disable_all_apis key is absent', async () => {
+    const res = await worker.fetch(req('/v1/testing/health', { Authorization: 'Bearer any' }), makeEnv());
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('auth', () => {
   it('401 missing api key — no Authorization header', async () => {
     const res = await worker.fetch(req('/v1/testing/health'), makeEnv());
