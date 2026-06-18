@@ -1,4 +1,5 @@
 import { ROUTES } from './routes.js';
+export { RateLimiter } from './rate-limiter.js';
 
 async function hashKey(rawKey) {
   const encoded = new TextEncoder().encode(rawKey);
@@ -6,6 +7,15 @@ async function hashKey(rawKey) {
   return Array.from(new Uint8Array(hashBuffer))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+async function resolveLimits(env, tier, scope) {
+  if (!tier) return { rpm: 0, rpd: 0 };
+  const scopeRaw = await env.API_KEYS.get(`tier:${tier}:scope:${scope}`, { cacheTtl: 300 });
+  if (scopeRaw) return JSON.parse(scopeRaw);
+  const tierRaw = await env.API_KEYS.get(`tier:${tier}`, { cacheTtl: 300 });
+  if (tierRaw) return JSON.parse(tierRaw);
+  return { rpm: 0, rpd: 0 };
 }
 
 export default {
@@ -20,7 +30,7 @@ export default {
 
     const rawKey = authHeader.slice(7);
     const keyHash = await hashKey(rawKey);
-    const entry = await env.API_KEYS.get(keyHash);
+    const entry = await env.API_KEYS.get(keyHash, { cacheTtl: 60 });
 
     if (!entry) {
       return new Response(JSON.stringify({ error: 'invalid api key' }), {
@@ -45,6 +55,33 @@ export default {
             status: 403,
             headers: { 'content-type': 'application/json' },
           });
+        }
+
+        const limits = await resolveLimits(env, keyData.tier, route.scope);
+
+        // rpm=0 && rpd=0 means unlimited — skip the DO check entirely
+        if (limits.rpm !== 0 || limits.rpd !== 0) {
+          const id = env.RATE_LIMITER.idFromName(keyHash);
+          const stub = env.RATE_LIMITER.get(id);
+          const rlRes = await stub.fetch('https://internal/check', {
+            method: 'POST',
+            body: JSON.stringify({ rpm: limits.rpm, rpd: limits.rpd }),
+          });
+          const rl = await rlRes.json();
+
+          if (!rl.allowed) {
+            const retryAfter = Math.max(0, rl.reset_rpm - Math.floor(Date.now() / 1000));
+            return new Response(JSON.stringify({ error: 'rate limit exceeded' }), {
+              status: 429,
+              headers: {
+                'content-type': 'application/json',
+                'Retry-After': String(retryAfter),
+                'X-RateLimit-Limit': String(limits.rpm),
+                'X-RateLimit-Remaining': '0',
+                'X-RateLimit-Reset': String(rl.reset_rpm),
+              },
+            });
+          }
         }
 
         const targetUrl = route.backend + url.pathname + url.search;
