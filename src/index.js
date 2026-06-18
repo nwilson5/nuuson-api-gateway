@@ -60,6 +60,7 @@ export default {
         const limits = await resolveLimits(env, keyData.tier, route.scope);
 
         // rpm=0 && rpd=0 means unlimited — skip the DO check entirely
+        let rlHeaders = null;
         if (limits.rpm !== 0 || limits.rpd !== 0) {
           const id = env.RATE_LIMITER.idFromName(keyHash);
           const stub = env.RATE_LIMITER.get(id);
@@ -82,6 +83,12 @@ export default {
               },
             });
           }
+
+          rlHeaders = {
+            'X-RateLimit-Limit': String(limits.rpm),
+            'X-RateLimit-Remaining': String(rl.remaining_rpm ?? 0),
+            'X-RateLimit-Reset': String(rl.reset_rpm),
+          };
         }
 
         const targetUrl = route.backend + url.pathname + url.search;
@@ -91,11 +98,21 @@ export default {
         outboundHeaders.set('CF-Access-Client-Id', env.CF_ACCESS_CLIENT_ID);
         outboundHeaders.set('CF-Access-Client-Secret', env.CF_ACCESS_CLIENT_SECRET);
 
-        return fetch(new Request(targetUrl, {
+        const backendRes = await fetch(new Request(targetUrl, {
           method: request.method,
           headers: outboundHeaders,
           body: request.body,
         }));
+
+        if (!rlHeaders) return backendRes;
+
+        const res = new Response(backendRes.body, {
+          status: backendRes.status,
+          statusText: backendRes.statusText,
+          headers: new Headers(backendRes.headers),
+        });
+        for (const [k, v] of Object.entries(rlHeaders)) res.headers.set(k, v);
+        return res;
       }
     }
 

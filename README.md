@@ -7,8 +7,11 @@ Cloudflare Worker at `api.nuuson.dev`. Validates API keys and proxies requests t
 1. Caller sends `Authorization: Bearer nuu_<key>` to `api.nuuson.dev/v1/<service>/...`
 2. Worker SHA-256 hashes the key and looks it up in the `API_KEYS` KV namespace
 3. If missing or `valid: false` → 401
-4. Valid → strips `Authorization`, injects CF Access service token headers, proxies to the backend internal subdomain
-5. Backend response returned to caller
+4. Checks key's `scopes` array includes the route's scope (or `all`) → 403 if not
+5. Reads tier limits from KV (`tier:<name>:scope:<scope>` → `tier:<name>` → unlimited fallback)
+6. Enforces rate limits via Durable Object (fixed-bucket sliding window) → 429 if exceeded; skipped if `rpm=0 && rpd=0` (unlimited tier)
+7. Strips `Authorization`, injects CF Access service token headers, proxies to the backend internal subdomain
+8. Backend response returned to caller
 
 API keys are issued and managed by `nuuson-api-admin`. The KV namespace is shared between both services.
 
@@ -18,12 +21,14 @@ API keys are issued and managed by `nuuson-api-admin`. The KV namespace is share
 
 ```js
 export const ROUTES = {
-  '/v1/testing/': 'https://testing-internal.nuuson.dev',
-  // '/v1/my-new-service/': 'https://my-new-service-internal.nuuson.dev',
+  '/v1/testing/': {
+    backend: 'https://testing-internal.nuuson.dev',
+    scope: 'testing',
+  },
 };
 ```
 
-To register a new service: add one line here and open a PR. The backend URL must be an internal subdomain protected by the same Cloudflare Access policy as the existing backends (service token: `nuuson-api-gateway`).
+To register a new service: add one entry here (backend URL + scope name) and open a PR. The backend URL must be an internal subdomain protected by the same Cloudflare Access policy as the existing backends (service token: `nuuson-api-gateway`).
 
 ## One-time setup for a new deployment
 
@@ -71,7 +76,7 @@ No secrets needed — deploy credentials come from Vault via OIDC.
 
 ## CI/CD
 
-On pull request: dry-run bundle check (`wrangler deploy --dry-run`).
+On pull request: unit tests (`npm test`) + dry-run bundle check (`wrangler deploy --dry-run`).
 On push to main: deploy to Cloudflare.
 
 Set `Deploy / validate` as a required status check on `main` in repo settings.
