@@ -9,6 +9,19 @@ async function hashKey(rawKey) {
     .join('');
 }
 
+function writeUsage(ctx, env, { keyId, pathname, tier, scope, statusCode, latencyMs }) {
+  if (!env.USAGE || !ctx) return;
+  ctx.waitUntil(
+    Promise.resolve(
+      env.USAGE.writeDataPoint({
+        blobs: [keyId, pathname, tier, scope],
+        doubles: [latencyMs, statusCode],
+        indexes: [keyId],
+      }),
+    ),
+  );
+}
+
 async function resolveLimits(env, tier, scope) {
   if (!tier) return { rpm: 0, rpd: 0 };
   const scopeRaw = await env.API_KEYS.get(`tier:${tier}:scope:${scope}`, { cacheTtl: 300 });
@@ -19,7 +32,8 @@ async function resolveLimits(env, tier, scope) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
+    const start = Date.now();
     const authHeader = request.headers.get('Authorization') ?? '';
     if (!authHeader.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'missing api key' }), {
@@ -51,6 +65,7 @@ export default {
     for (const [prefix, route] of Object.entries(ROUTES)) {
       if (url.pathname.startsWith(prefix)) {
         if (!keyData.scopes.includes(route.scope) && !keyData.scopes.includes('all')) {
+          writeUsage(ctx, env, { keyId: keyData.id, pathname: url.pathname, tier: keyData.tier, scope: route.scope, statusCode: 403, latencyMs: Date.now() - start });
           return new Response(JSON.stringify({ error: 'insufficient scope' }), {
             status: 403,
             headers: { 'content-type': 'application/json' },
@@ -72,6 +87,7 @@ export default {
 
           if (!rl.allowed) {
             const retryAfter = Math.max(0, rl.reset_rpm - Math.floor(Date.now() / 1000));
+            writeUsage(ctx, env, { keyId: keyData.id, pathname: url.pathname, tier: keyData.tier, scope: route.scope, statusCode: 429, latencyMs: Date.now() - start });
             return new Response(JSON.stringify({ error: 'rate limit exceeded' }), {
               status: 429,
               headers: {
@@ -103,6 +119,8 @@ export default {
           headers: outboundHeaders,
           body: request.body,
         }));
+
+        writeUsage(ctx, env, { keyId: keyData.id, pathname: url.pathname, tier: keyData.tier, scope: route.scope, statusCode: backendRes.status, latencyMs: Date.now() - start });
 
         if (!rlHeaders) return backendRes;
 

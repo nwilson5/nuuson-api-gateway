@@ -216,6 +216,70 @@ describe('rate limiting', () => {
   });
 });
 
+function makeCtx() {
+  return { waitUntil: vi.fn((p) => p) };
+}
+
+function makeUsage() {
+  return { writeDataPoint: vi.fn() };
+}
+
+describe('analytics', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('writes usage on successful proxied response with backend status code', async () => {
+    const raw = 'analytics-proxy-key';
+    const hash = await hashKey(raw);
+    const kv = { [hash]: keyEntry() };
+    const usage = makeUsage();
+    const ctx = makeCtx();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('ok', { status: 201 })));
+    await worker.fetch(req('/v1/testing/path', { Authorization: `Bearer ${raw}` }), { ...makeEnv(kv), USAGE: usage }, ctx);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    const dp = usage.writeDataPoint.mock.calls[0][0];
+    expect(dp.blobs[0]).toBe('u1');
+    expect(dp.blobs[2]).toBe('free');
+    expect(dp.blobs[3]).toBe('testing');
+    expect(dp.doubles[1]).toBe(201);
+    expect(dp.indexes[0]).toBe('u1');
+  });
+
+  it('writes usage with status 403 on scope denied', async () => {
+    const raw = 'analytics-403-key';
+    const hash = await hashKey(raw);
+    const kv = { [hash]: keyEntry({ scopes: ['admin'] }) };
+    const usage = makeUsage();
+    const ctx = makeCtx();
+    await worker.fetch(req('/v1/testing/path', { Authorization: `Bearer ${raw}` }), { ...makeEnv(kv), USAGE: usage }, ctx);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    const dp = usage.writeDataPoint.mock.calls[0][0];
+    expect(dp.doubles[1]).toBe(403);
+  });
+
+  it('writes usage with status 429 on rate limit exceeded', async () => {
+    const raw = 'analytics-429-key';
+    const hash = await hashKey(raw);
+    const kv = { [hash]: keyEntry(), [`tier:free`]: JSON.stringify({ rpm: 60, rpd: 500 }) };
+    const usage = makeUsage();
+    const ctx = makeCtx();
+    await worker.fetch(
+      req('/v1/testing/path', { Authorization: `Bearer ${raw}` }),
+      { ...makeEnvWithLimits(kv, { allowed: false, reset_rpm: 9999999999 }), USAGE: usage },
+      ctx,
+    );
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    const dp = usage.writeDataPoint.mock.calls[0][0];
+    expect(dp.doubles[1]).toBe(429);
+  });
+
+  it('does not write usage on 401 (no key data available)', async () => {
+    const usage = makeUsage();
+    const ctx = makeCtx();
+    await worker.fetch(req('/v1/testing/path'), { ...makeEnv(), USAGE: usage }, ctx);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+});
+
 describe('routing', () => {
   it('404 not found — no matching route', async () => {
     const raw = 'route-test-key';
