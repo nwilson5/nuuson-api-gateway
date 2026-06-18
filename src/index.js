@@ -38,9 +38,16 @@ export default {
     }
 
     const url = new URL(request.url);
-    for (const [prefix, backend] of Object.entries(ROUTES)) {
+    for (const [prefix, route] of Object.entries(ROUTES)) {
       if (url.pathname.startsWith(prefix)) {
-        const targetUrl = backend + url.pathname + url.search;
+        if (!keyData.scopes.includes(route.scope) && !keyData.scopes.includes('all')) {
+          return new Response(JSON.stringify({ error: 'insufficient scope' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+
+        const targetUrl = route.backend + url.pathname + url.search;
 
         const outboundHeaders = new Headers(request.headers);
         outboundHeaders.delete('Authorization');
