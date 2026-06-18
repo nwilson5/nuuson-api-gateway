@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import worker from './index.js';
 
 async function hashKey(raw) {
@@ -93,6 +93,126 @@ describe('scope', () => {
     expect(res.status).not.toBe(401);
     expect(res.status).not.toBe(403);
     vi.unstubAllGlobals();
+  });
+});
+
+function makeRateLimiter(rl = {}) {
+  const defaults = { allowed: true, remaining_rpm: 59, remaining_rpd: 499, reset_rpm: 9999999999 };
+  const response = { ...defaults, ...rl };
+  return {
+    idFromName: () => 'test-id',
+    get: () => ({
+      fetch: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(response), { headers: { 'content-type': 'application/json' } }),
+      ),
+    }),
+  };
+}
+
+function makeEnvWithLimits(kvEntries = {}, rl = {}) {
+  return { ...makeEnv(kvEntries), RATE_LIMITER: makeRateLimiter(rl) };
+}
+
+describe('rate limiting', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('X-RateLimit-* headers present on successful proxied response', async () => {
+    const raw = 'rl-headers-key';
+    const hash = await hashKey(raw);
+    const kv = {
+      [hash]: keyEntry(),
+      [`tier:free:scope:testing`]: null,
+      [`tier:free`]: JSON.stringify({ rpm: 60, rpd: 500 }),
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('ok', { status: 200 })));
+    const res = await worker.fetch(
+      req('/v1/testing/path', { Authorization: `Bearer ${raw}` }),
+      makeEnvWithLimits(kv),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('60');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('59');
+    expect(res.headers.get('X-RateLimit-Reset')).toBeTruthy();
+  });
+
+  it('429 with Retry-After and X-RateLimit-* when DO denies request', async () => {
+    const raw = 'rl-exceeded-key';
+    const hash = await hashKey(raw);
+    const kv = {
+      [hash]: keyEntry(),
+      [`tier:free`]: JSON.stringify({ rpm: 60, rpd: 500 }),
+    };
+    const res = await worker.fetch(
+      req('/v1/testing/path', { Authorization: `Bearer ${raw}` }),
+      makeEnvWithLimits(kv, { allowed: false, reset_rpm: 9999999999 }),
+    );
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: 'rate limit exceeded' });
+    expect(res.headers.get('Retry-After')).toBeTruthy();
+    expect(res.headers.get('X-RateLimit-Limit')).toBe('60');
+    expect(res.headers.get('X-RateLimit-Remaining')).toBe('0');
+  });
+
+  it('unlimited tier skips DO entirely and omits rate limit headers', async () => {
+    const raw = 'unlimited-key';
+    const hash = await hashKey(raw);
+    const kv = {
+      [hash]: keyEntry({ tier: 'unlimited' }),
+      [`tier:unlimited`]: JSON.stringify({ rpm: 0, rpd: 0 }),
+    };
+    const doStub = makeRateLimiter();
+    const doFetch = doStub.get().fetch;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('ok', { status: 200 })));
+    const res = await worker.fetch(
+      req('/v1/testing/path', { Authorization: `Bearer ${raw}` }),
+      { ...makeEnv(kv), RATE_LIMITER: doStub },
+    );
+    expect(res.status).toBe(200);
+    expect(doFetch).not.toHaveBeenCalled();
+    expect(res.headers.get('X-RateLimit-Limit')).toBeNull();
+  });
+
+  it('scope override takes precedence over tier limit', async () => {
+    const raw = 'scope-override-key';
+    const hash = await hashKey(raw);
+    const kv = {
+      [hash]: keyEntry(),
+      [`tier:free:scope:testing`]: JSON.stringify({ rpm: 10, rpd: 100 }),
+      [`tier:free`]: JSON.stringify({ rpm: 60, rpd: 500 }),
+    };
+    const doFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ allowed: true, remaining_rpm: 9, remaining_rpd: 99, reset_rpm: 9999999999 }),
+        { headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('ok', { status: 200 })));
+    await worker.fetch(
+      req('/v1/testing/path', { Authorization: `Bearer ${raw}` }),
+      { ...makeEnv(kv), RATE_LIMITER: { idFromName: () => 'id', get: () => ({ fetch: doFetch }) } },
+    );
+    const doCall = JSON.parse(doFetch.mock.calls[0][1].body ?? '{}');
+    expect(doCall.rpm).toBe(10);
+    expect(doCall.rpd).toBe(100);
+  });
+
+  it('falls back to tier limit when no scope override exists', async () => {
+    const raw = 'tier-fallback-key';
+    const hash = await hashKey(raw);
+    const kv = {
+      [hash]: keyEntry(),
+      [`tier:free`]: JSON.stringify({ rpm: 60, rpd: 500 }),
+    };
+    const doFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ allowed: true, remaining_rpm: 59, remaining_rpd: 499, reset_rpm: 9999999999 }),
+        { headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('ok', { status: 200 })));
+    await worker.fetch(
+      req('/v1/testing/path', { Authorization: `Bearer ${raw}` }),
+      { ...makeEnv(kv), RATE_LIMITER: { idFromName: () => 'id', get: () => ({ fetch: doFetch }) } },
+    );
+    const doCall = JSON.parse(doFetch.mock.calls[0][1].body ?? '{}');
+    expect(doCall.rpm).toBe(60);
+    expect(doCall.rpd).toBe(500);
   });
 });
 
