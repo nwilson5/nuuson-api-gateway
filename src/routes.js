@@ -1,9 +1,10 @@
 // Route table for api.nuuson.dev
-// Format: '/v1/<service>/': 'https://<backend-url>'
-//
-// Updated automatically via PR when a new service is deployed.
-// Backend URLs should be internal subdomains protected by Cloudflare Access.
+// To add a service: one entry here, open a PR.
+// Format: '/v1/<service>/': { backend: 'https://<service>-internal.nuuson.dev', scope: '<service>' }
 
 export const ROUTES = {
-  '/v1/testing/': 'https://testing-internal.nuuson.dev',
+  '/v1/testing/': {
+    backend: 'https://testing-internal.nuuson.dev',
+    scope: 'testing',
+  },
 };
