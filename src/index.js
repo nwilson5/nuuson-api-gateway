@@ -34,6 +34,18 @@ async function resolveLimits(env, tier, scope) {
 export default {
   async fetch(request, env, ctx) {
     const start = Date.now();
+
+    const globalDisableRaw = await env.API_KEYS.get('global:disable_all_apis', { cacheTtl: 30 });
+    if (globalDisableRaw) {
+      const { enabled } = JSON.parse(globalDisableRaw);
+      if (enabled) {
+        return new Response(JSON.stringify({ error: 'service unavailable' }), {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+    }
+
     const authHeader = request.headers.get('Authorization') ?? '';
     if (!authHeader.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'missing api key' }), {
